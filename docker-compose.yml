@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  telegram-bot:
+    build: .
+    container_name: vk-album-bot
+    restart: unless-stopped
+    environment:
+      - VK_ACCESS_TOKEN=${VK_ACCESS_TOKEN}
+      - YANDEX_DISK_TOKEN=${YANDEX_DISK_TOKEN}
+      - YANDEX_DISK_PATH=${YANDEX_DISK_PATH:-/VK_Albums}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+    volumes:
+      # Mount volume for temporary album storage
+      - album-data:/app/vk_downloaded_albums
+    # Uncomment to limit resources
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '1'
+    #       memory: 512M
+    #     reservations:
+    #       cpus: '0.5'
+    #       memory: 256M
+
+volumes:
+  album-data:
+    driver: local

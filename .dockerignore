@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Environment and secrets
+.env
+.env.example
+passwords.txt
+
+# Downloaded albums (will be created in container)
+vk_downloaded_albums/
+
+# Documentation
+*.md
+TELEGRAM_BOT_SETUP.md
+
+# Album lists (optional - include if needed)
+album_list_2.txt
+albums_list.txt
+
+# Other Python files not needed for bot
+main.py
+get_all_albums.py
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# GitHub
+.github/

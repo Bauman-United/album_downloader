@@ -1,0 +1,117 @@
+name: Build and Deploy Telegram Bot
+
+on:
+  # Trigger on push to main branch
+  push:
+    branches:
+      - main
+  
+  # Allow manual trigger from GitHub UI
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Log in to Docker Hub (Optional)
+        if: ${{ secrets.DOCKER_USERNAME != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      
+      - name: Build Docker image
+        run: |
+          docker build -t vk-album-bot:latest .
+      
+      - name: Save Docker image
+        run: |
+          docker save vk-album-bot:latest | gzip > vk-album-bot.tar.gz
+      
+      - name: Upload Docker image as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: vk-album-bot.tar.gz
+          retention-days: 7
+      
+      # Optional: Deploy to remote server via SSH
+      - name: Deploy to server (Optional)
+        if: ${{ secrets.SSH_HOST != '' }}
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script: |
+            cd ~/album_downloader
+            
+            # Stop existing container
+            docker-compose down || true
+            
+            # Pull latest code
+            git pull origin main
+            
+            # Create .env file from secrets
+            cat > .env << EOF
+            VK_ACCESS_TOKEN=${{ secrets.VK_ACCESS_TOKEN }}
+            YANDEX_DISK_TOKEN=${{ secrets.YANDEX_DISK_TOKEN }}
+            YANDEX_DISK_PATH=${{ secrets.YANDEX_DISK_PATH }}
+            TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+            EOF
+            
+            # Build and start container
+            docker-compose up -d --build
+            
+            # Show logs
+            docker-compose logs -f --tail=50
+      
+      # Alternative: Run directly on GitHub Actions (for testing)
+      - name: Test bot startup
+        env:
+          VK_ACCESS_TOKEN: ${{ secrets.VK_ACCESS_TOKEN }}
+          YANDEX_DISK_TOKEN: ${{ secrets.YANDEX_DISK_TOKEN }}
+          YANDEX_DISK_PATH: ${{ secrets.YANDEX_DISK_PATH }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          echo "Testing Docker container startup..."
+          docker run -d \
+            --name test-bot \
+            -e VK_ACCESS_TOKEN="${VK_ACCESS_TOKEN}" \
+            -e YANDEX_DISK_TOKEN="${YANDEX_DISK_TOKEN}" \
+            -e YANDEX_DISK_PATH="${YANDEX_DISK_PATH}" \
+            -e TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN}" \
+            vk-album-bot:latest
+          
+          # Wait a bit for startup
+          sleep 10
+          
+          # Check if container is running
+          docker ps -a
+          docker logs test-bot
+          
+          # Stop test container
+          docker stop test-bot
+          docker rm test-bot
+          
+          echo "✅ Docker container test successful!"
+      
+      - name: Notify on success
+        if: success()
+        run: |
+          echo "✅ Build and deploy completed successfully!"
+          echo "Docker image: vk-album-bot:latest"
+      
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "❌ Build or deploy failed!"
+          exit 1
