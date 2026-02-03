@@ -84,35 +84,12 @@ jobs:
             
             echo "✅ Deployment completed!"
       
-      # Alternative: Run directly on GitHub Actions (for testing)
-      - name: Test bot startup
-        env:
-          VK_ACCESS_TOKEN: ${{ secrets.VK_ACCESS_TOKEN }}
-          YANDEX_DISK_TOKEN: ${{ secrets.YANDEX_DISK_TOKEN }}
-          YANDEX_DISK_PATH: ${{ secrets.YANDEX_DISK_PATH }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      # Test Docker image build only (don't start bot to avoid conflicts)
+      - name: Test Docker image
         run: |
-          echo "Testing Docker container startup..."
-          docker run -d \
-            --name test-bot \
-            -e VK_ACCESS_TOKEN="${VK_ACCESS_TOKEN}" \
-            -e YANDEX_DISK_TOKEN="${YANDEX_DISK_TOKEN}" \
-            -e YANDEX_DISK_PATH="${YANDEX_DISK_PATH}" \
-            -e TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN}" \
-            vk-album-bot:latest
-          
-          # Wait a bit for startup
-          sleep 10
-          
-          # Check if container is running
-          docker ps -a
-          docker logs test-bot
-          
-          # Stop test container
-          docker stop test-bot
-          docker rm test-bot
-          
-          echo "✅ Docker container test successful!"
+          echo "Testing Docker image build..."
+          docker images | grep vk-album-bot
+          echo "✅ Docker image built successfully!"
       
       - name: Notify on success
         if: success()
