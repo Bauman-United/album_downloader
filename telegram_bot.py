@@ -263,72 +263,106 @@ async def download_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_album_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle album URL and start workflow"""
-    album_url = update.message.text.strip()
-    chat_id = update.effective_chat.id
-    
-    # Validate URL
     try:
-        process_url(album_url)
-    except ValueError:
-        await update.message.reply_text(
-            "❌ Invalid album URL format.\n"
-            "Please send a valid VK album URL like:\n"
-            "`https://vk.com/album-123456789_987654321`\n\n"
-            "Or send /cancel to cancel",
-            parse_mode='Markdown'
+        album_url = update.message.text.strip()
+        chat_id = update.effective_chat.id
+        
+        # Validate URL
+        try:
+            process_url(album_url)
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Invalid album URL format.\n"
+                "Please send a valid VK album URL like:\n"
+                "`https://vk.com/album-123456789_987654321`\n\n"
+                "Or send /cancel to cancel",
+                parse_mode='Markdown'
+            )
+            return WAITING_FOR_ALBUM_URL
+        
+        await update.message.reply_text("🚀 Starting workflow...")
+        
+        # Step 1: Download
+        await context.bot.send_message(chat_id=chat_id, text="━━━━━ STEP 1: DOWNLOAD ━━━━━")
+        album_info = await download_album(album_url, chat_id, context)
+        
+        if not album_info:
+            await update.message.reply_text("❌ Download failed. Workflow stopped.")
+            return ConversationHandler.END
+        
+        await context.bot.send_message(chat_id=chat_id, text="✅ Download completed!")
+        
+        # Step 2: Upload
+        await context.bot.send_message(chat_id=chat_id, text="\n━━━━━ STEP 2: UPLOAD ━━━━━")
+        upload_result = await upload_album_to_yandex(album_info, chat_id, context)
+        
+        if not upload_result:
+            await update.message.reply_text("❌ Upload failed. Local files preserved.")
+            return ConversationHandler.END
+        
+        await context.bot.send_message(chat_id=chat_id, text="✅ Upload completed!")
+        
+        # Step 3: Cleanup
+        await context.bot.send_message(chat_id=chat_id, text="\n━━━━━ STEP 3: CLEANUP ━━━━━")
+        clear_local_album(album_info['path'])
+        await context.bot.send_message(chat_id=chat_id, text="✅ Local files cleaned up!")
+        
+        # Final success message
+        success_message = (
+            "\n🎉 *WORKFLOW COMPLETED SUCCESSFULLY!*\n\n"
+            f"📁 Album: *{album_info['title']}*\n"
+            f"📸 Photos: {album_info['count']}\n"
+            f"📤 Uploaded: {upload_result['uploaded']} new\n"
+            f"⊘ Skipped: {upload_result['skipped']} existing\n"
         )
-        return WAITING_FOR_ALBUM_URL
-    
-    await update.message.reply_text("🚀 Starting workflow...")
-    
-    # Step 1: Download
-    await context.bot.send_message(chat_id=chat_id, text="━━━━━ STEP 1: DOWNLOAD ━━━━━")
-    album_info = await download_album(album_url, chat_id, context)
-    
-    if not album_info:
-        await update.message.reply_text("❌ Download failed. Workflow stopped.")
+        
+        if upload_result['public_url']:
+            success_message += f"\n🔗 *Public link:*\n{upload_result['public_url']}"
+        else:
+            success_message += f"\n📂 *Path:* `{upload_result['remote_path']}`"
+        
+        await update.message.reply_text(success_message, parse_mode='Markdown')
+        
         return ConversationHandler.END
-    
-    await context.bot.send_message(chat_id=chat_id, text="✅ Download completed!")
-    
-    # Step 2: Upload
-    await context.bot.send_message(chat_id=chat_id, text="\n━━━━━ STEP 2: UPLOAD ━━━━━")
-    upload_result = await upload_album_to_yandex(album_info, chat_id, context)
-    
-    if not upload_result:
-        await update.message.reply_text("❌ Upload failed. Local files preserved.")
+        
+    except Exception as e:
+        print(f'❌ Error in handle_album_url: {e}')
+        await update.message.reply_text(
+            f"❌ An unexpected error occurred: {str(e)}\n\n"
+            "Please try again or contact the administrator."
+        )
         return ConversationHandler.END
-    
-    await context.bot.send_message(chat_id=chat_id, text="✅ Upload completed!")
-    
-    # Step 3: Cleanup
-    await context.bot.send_message(chat_id=chat_id, text="\n━━━━━ STEP 3: CLEANUP ━━━━━")
-    clear_local_album(album_info['path'])
-    await context.bot.send_message(chat_id=chat_id, text="✅ Local files cleaned up!")
-    
-    # Final success message
-    success_message = (
-        "\n🎉 *WORKFLOW COMPLETED SUCCESSFULLY!*\n\n"
-        f"📁 Album: *{album_info['title']}*\n"
-        f"📸 Photos: {album_info['count']}\n"
-        f"📤 Uploaded: {upload_result['uploaded']} new\n"
-        f"⊘ Skipped: {upload_result['skipped']} existing\n"
-    )
-    
-    if upload_result['public_url']:
-        success_message += f"\n🔗 *Public link:*\n{upload_result['public_url']}"
-    else:
-        success_message += f"\n📂 *Path:* `{upload_result['remote_path']}`"
-    
-    await update.message.reply_text(success_message, parse_mode='Markdown')
-    
-    return ConversationHandler.END
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancel the conversation"""
     await update.message.reply_text("❌ Operation cancelled.")
     return ConversationHandler.END
+
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Global error handler for the bot"""
+    try:
+        # Log the error
+        print(f'❌ Error occurred: {context.error}')
+        
+        # Try to notify the user if update is available
+        if update and update.effective_chat:
+            error_message = (
+                "❌ An error occurred while processing your request.\n\n"
+                "Please try again or contact the administrator if the problem persists."
+            )
+            
+            # Send error message to user
+            try:
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text=error_message
+                )
+            except Exception as e:
+                print(f'Failed to send error message to user: {e}')
+    except Exception as e:
+        print(f'Error in error handler: {e}')
 
 
 def main():
@@ -360,11 +394,26 @@ def main():
     application.add_handler(CommandHandler('help', help_command))
     application.add_handler(conv_handler)
     
+    # Add global error handler
+    application.add_error_handler(error_handler)
+    
     print('🤖 Bot started! Press Ctrl+C to stop.')
     
-    # Start polling
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    try:
+        # Start polling
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
+    except KeyboardInterrupt:
+        print('\n⚠️ Bot stopped by user (Ctrl+C)')
+    except Exception as e:
+        print(f'❌ Fatal error: {e}')
+        raise
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f'❌ Bot crashed: {e}')
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
