@@ -44,13 +44,21 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           script: |
+            # Create directory if it doesn't exist
+            mkdir -p ~/album_downloader
             cd ~/album_downloader
             
-            # Stop existing container
-            docker-compose down || true
+            # Clone or update repository
+            if [ -d ".git" ]; then
+              echo "Repository exists, pulling latest changes..."
+              git pull origin main
+            else
+              echo "Cloning repository..."
+              git clone https://github.com/${{ github.repository }} .
+            fi
             
-            # Pull latest code
-            git pull origin main
+            # Stop existing container
+            docker compose down 2>/dev/null || docker-compose down 2>/dev/null || true
             
             # Create .env file from secrets
             cat > .env << EOF
@@ -60,11 +68,21 @@ jobs:
             TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
             EOF
             
-            # Build and start container
-            docker-compose up -d --build
+            # Build and start container (try both docker compose v2 and v1)
+            if command -v docker &> /dev/null && docker compose version &> /dev/null; then
+              echo "Using Docker Compose v2..."
+              docker compose up -d --build
+              docker compose logs --tail=50
+            elif command -v docker-compose &> /dev/null; then
+              echo "Using Docker Compose v1..."
+              docker-compose up -d --build
+              docker-compose logs --tail=50
+            else
+              echo "ERROR: Docker Compose not found!"
+              exit 1
+            fi
             
-            # Show logs
-            docker-compose logs -f --tail=50
+            echo "✅ Deployment completed!"
       
       # Alternative: Run directly on GitHub Actions (for testing)
       - name: Test bot startup
