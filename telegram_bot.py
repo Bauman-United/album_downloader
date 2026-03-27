@@ -63,15 +63,24 @@ def fix_illegal_album_title(title):
     return title
 
 
-def download_image(url, local_file_name):
+def download_image(url, local_file_name, timeout=30, retries=3):
     """Download single image from URL"""
-    response = requests.get(url, stream=True)
-    if not response.ok:
-        return False
-    with open(local_file_name, 'wb') as file:
-        for chunk in response.iter_content(1024):
-            file.write(chunk)
-    return True
+    for attempt in range(1, retries + 1):
+        try:
+            response = requests.get(url, stream=True, timeout=timeout)
+            if not response.ok:
+                if attempt == retries:
+                    return False
+                continue
+
+            with open(local_file_name, 'wb') as file:
+                for chunk in response.iter_content(1024):
+                    file.write(chunk)
+            return True
+        except requests.RequestException:
+            if attempt == retries:
+                return False
+    return False
 
 
 async def download_album(album_url, chat_id, context):
@@ -119,6 +128,8 @@ async def download_album(album_url, chat_id, context):
     
     tracker = ProgressTracker(chat_id, context)
     
+    downloaded_count = 0
+    failed_photos = []
     for i, p in enumerate(photos, 1):
         largest_image_width = p['sizes'][0]['width']
         largest_image_src = p['sizes'][0]['url']
@@ -132,11 +143,41 @@ async def download_album(album_url, chat_id, context):
                     largest_image_src = size['url']
         
         extension = os.path.splitext(largest_image_src)[-1].split('?')[0]
-        download_image(largest_image_src, album_path + '/' + str(p['id']) + extension)
+        local_photo_path = album_path + '/' + str(p['id']) + extension
+        is_downloaded = download_image(largest_image_src, local_photo_path, timeout=30, retries=3)
+        if is_downloaded:
+            downloaded_count += 1
+        else:
+            failed_photos.append(str(p['id']))
         
         await tracker.update_progress(i, images_num, "Downloading")
+
+    failed_count = len(failed_photos)
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            "📥 Download finished.\n"
+            f"✅ Downloaded: {downloaded_count}/{images_num}\n"
+            f"❌ Failed: {failed_count}"
+        )
+    )
+
+    if failed_photos:
+        failed_preview = ", ".join(failed_photos[:20])
+        extra = f" (+{failed_count - 20} more)" if failed_count > 20 else ""
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"⚠️ Failed photo IDs: {failed_preview}{extra}"
+        )
     
-    return {'path': album_path, 'title': title, 'count': images_num}
+    return {
+        'path': album_path,
+        'title': title,
+        'count': images_num,
+        'downloaded_count': downloaded_count,
+        'failed_count': failed_count,
+        'failed_photo_ids': failed_photos,
+    }
 
 
 async def upload_album_to_yandex(album_info, chat_id, context, remote_base_path):
@@ -345,7 +386,9 @@ async def handle_album_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         success_message = (
             "\n🎉 *WORKFLOW COMPLETED SUCCESSFULLY!*\n\n"
             f"📁 Album: *{album_info['title']}*\n"
-            f"📸 Photos: {album_info['count']}\n"
+            f"📸 Photos in album: {album_info['count']}\n"
+            f"📥 Downloaded: {album_info['downloaded_count']}\n"
+            f"❌ Download failed: {album_info['failed_count']}\n"
             f"📤 Uploaded: {upload_result['uploaded']} new\n"
             f"⊘ Skipped: {upload_result['skipped']} existing\n"
         )
