@@ -4,6 +4,7 @@ import re
 import shutil
 from dotenv import load_dotenv
 from telegram import Update
+from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 import vk_api
 import requests
@@ -16,8 +17,10 @@ from get_vk_session import get_vk_session
 load_dotenv()
 
 # Constants
-WAITING_FOR_ALBUM_URL = 1
+WAITING_FOR_DESTINATION = 1
+WAITING_FOR_ALBUM_URL = 2
 path_to_downloaded_albums = 'vk_downloaded_albums'
+DESTINATION_OPTIONS = {'ЛФЛ': '/лфл/2026', 'БЛ': '/БЛ/весна_2026'}
 
 # Progress tracking
 class ProgressTracker:
@@ -136,7 +139,7 @@ async def download_album(album_url, chat_id, context):
     return {'path': album_path, 'title': title, 'count': images_num}
 
 
-async def upload_album_to_yandex(album_info, chat_id, context):
+async def upload_album_to_yandex(album_info, chat_id, context, remote_base_path):
     """Upload album to Yandex Disk"""
     token = os.getenv('YANDEX_DISK_TOKEN')
     
@@ -150,14 +153,13 @@ async def upload_album_to_yandex(album_info, chat_id, context):
         await context.bot.send_message(chat_id=chat_id, text="❌ Invalid Yandex Disk token")
         return None
     
-    yandex_disk_path = os.getenv('YANDEX_DISK_PATH', '/VK_Albums')
     album_title = album_info['title']
     local_album_path = album_info['path']
-    remote_album_path = f'{yandex_disk_path}/{album_title}'
+    remote_album_path = f'{remote_base_path}/{album_title}'
     
     # Create base directory if needed
-    if not y.exists(yandex_disk_path):
-        y.mkdir(yandex_disk_path)
+    if not y.exists(remote_base_path):
+        y.mkdir(remote_base_path)
     
     # Create album directory
     if not y.exists(remote_album_path):
@@ -252,11 +254,39 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def download_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /download command"""
+    keyboard = [['ЛФЛ', 'БЛ']]
+    await update.message.reply_text(
+        "📂 Куда загрузить файлы?\n\nВыбери один из вариантов:",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+    )
+    return WAITING_FOR_DESTINATION
+
+
+async def handle_destination_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle destination choice and request album URL"""
+    destination = update.message.text.strip()
+    destination_suffix = DESTINATION_OPTIONS.get(destination)
+
+    if not destination_suffix:
+        keyboard = [['ЛФЛ', 'БЛ']]
+        await update.message.reply_text(
+            "❌ Пожалуйста, выбери только один вариант: ЛФЛ или БЛ.",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+        )
+        return WAITING_FOR_DESTINATION
+
+    yandex_disk_path = os.getenv('YANDEX_DISK_PATH', '/VK_Albums').rstrip('/')
+    if not yandex_disk_path:
+        yandex_disk_path = '/VK_Albums'
+
+    context.user_data['yandex_remote_base_path'] = f"{yandex_disk_path}{destination_suffix}"
+
     await update.message.reply_text(
         "📎 Please send me the VK album URL\n\n"
         "Example: `https://vk.com/album-123456789_987654321`\n\n"
         "Send /cancel to cancel",
-        parse_mode='Markdown'
+        parse_mode='Markdown',
+        reply_markup=ReplyKeyboardRemove()
     )
     return WAITING_FOR_ALBUM_URL
 
@@ -294,7 +324,11 @@ async def handle_album_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Step 2: Upload
         await context.bot.send_message(chat_id=chat_id, text="\n━━━━━ STEP 2: UPLOAD ━━━━━")
-        upload_result = await upload_album_to_yandex(album_info, chat_id, context)
+        remote_base_path = context.user_data.get('yandex_remote_base_path')
+        if not remote_base_path:
+            remote_base_path = os.getenv('YANDEX_DISK_PATH', '/VK_Albums')
+
+        upload_result = await upload_album_to_yandex(album_info, chat_id, context, remote_base_path)
         
         if not upload_result:
             await update.message.reply_text("❌ Upload failed. Local files preserved.")
@@ -336,7 +370,8 @@ async def handle_album_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancel the conversation"""
-    await update.message.reply_text("❌ Operation cancelled.")
+    context.user_data.pop('yandex_remote_base_path', None)
+    await update.message.reply_text("❌ Operation cancelled.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
 
@@ -382,6 +417,9 @@ def main():
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('download', download_command)],
         states={
+            WAITING_FOR_DESTINATION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_destination_choice)
+            ],
             WAITING_FOR_ALBUM_URL: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_album_url)
             ],
