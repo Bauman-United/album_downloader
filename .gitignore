@@ -1,6 +1,8 @@
 # VK credentials and tokens
 passwords.txt
 .env
+data/
+vk_token.json
 
 # Docker
 *.tar.gz

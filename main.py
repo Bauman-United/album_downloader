@@ -7,7 +7,7 @@ import sys
 import shutil
 from dotenv import load_dotenv
 
-from get_vk_session import get_vk_session
+from get_vk_session import get_vk_session, VkTokenMissingError
 from upload_to_yandex_disk import upload_albums_to_yandex_disk
 
 # Load environment variables
@@ -97,7 +97,11 @@ def clear_downloaded_albums():
 def download_albums():
     """Download all albums from VK"""
     queries = read_data()
-    vk_session = get_vk_session()
+    try:
+        vk_session = get_vk_session()
+    except VkTokenMissingError as e:
+        print(e)
+        sys.exit(1)
 
     # Token-based authentication doesn't need auth() call
     # Only try auth if using login/password

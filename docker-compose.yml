@@ -10,9 +10,15 @@ services:
       - YANDEX_DISK_TOKEN=${YANDEX_DISK_TOKEN}
       - YANDEX_DISK_PATH=${YANDEX_DISK_PATH:-/VK_Albums}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      # Telegram user ids allowed to change the VK token (comma separated, empty = everyone)
+      - TELEGRAM_ADMIN_IDS=${TELEGRAM_ADMIN_IDS:-}
+      # Where the token set via /set_vk_token is stored
+      - VK_TOKEN_FILE=${VK_TOKEN_FILE:-/app/data/vk_token.json}
     volumes:
       # Mount volume for temporary album storage
       - album-data:/app/vk_downloaded_albums
+      # Persist the VK token set via /set_vk_token across restarts
+      - bot-config:/app/data
     # Uncomment to limit resources
     # deploy:
     #   resources:
@@ -25,4 +31,6 @@ services:
 
 volumes:
   album-data:
+    driver: local
+  bot-config:
     driver: local

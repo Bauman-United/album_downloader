@@ -1,3 +1,4 @@
+import asyncio
 import os
 import sys
 import re
@@ -11,7 +12,8 @@ import requests
 import datetime
 import yadisk
 
-from get_vk_session import get_vk_session
+from get_vk_session import get_vk_session, build_vk_session, VkTokenMissingError
+from vk_token_store import read_stored_token, save_token, delete_token
 
 # Load environment variables
 load_dotenv()
@@ -19,8 +21,20 @@ load_dotenv()
 # Constants
 WAITING_FOR_DESTINATION = 1
 WAITING_FOR_ALBUM_URL = 2
+WAITING_FOR_VK_TOKEN = 3
 path_to_downloaded_albums = 'vk_downloaded_albums'
 DESTINATION_OPTIONS = {'ЛФЛ': '/лфл/2026', 'БЛ': '/БЛ/весна_2026'}
+VK_TOKEN_INSTRUCTIONS = (
+    "1️⃣ Открой ссылку и разреши доступ:\n"
+    "https://oauth.vk.com/authorize?client_id=7624256&display=page"
+    "&redirect_uri=https://oauth.vk.com/blank.html"
+    "&scope=photos,offline&response_type=token&v=5.131\n\n"
+    "2️⃣ Скопируй адресную строку со страницы, куда тебя перекинуло "
+    "(она начинается с https://oauth.vk.com/blank.html#access_token=...)\n\n"
+    "3️⃣ Пришли её сюда целиком — я сам достану токен.\n\n"
+    "Сообщение с токеном я удалю сразу после сохранения.\n"
+    "Отмена — /cancel"
+)
 
 # Progress tracking
 class ProgressTracker:
@@ -91,7 +105,14 @@ async def download_album(album_url, chat_id, context):
         await context.bot.send_message(chat_id=chat_id, text=f"❌ Error: {e}")
         return None
     
-    vk_session = get_vk_session()
+    try:
+        vk_session = get_vk_session()
+    except VkTokenMissingError:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="❌ Токен ВК не задан. Установи его командой /set_vk_token"
+        )
+        return None
     
     try:
         api = vk_session.get_api()
@@ -265,12 +286,162 @@ def clear_local_album(album_path):
         shutil.rmtree(album_path)
 
 
+def get_admin_ids():
+    """Telegram user ids allowed to change the VK token (empty = everyone)"""
+    raw = os.getenv('TELEGRAM_ADMIN_IDS', '')
+    ids = set()
+    for part in raw.replace(';', ',').split(','):
+        part = part.strip().lstrip('+')
+        if part.isdigit():
+            ids.add(int(part))
+    return ids
+
+
+def is_admin(user_id):
+    admin_ids = get_admin_ids()
+    return not admin_ids or user_id in admin_ids
+
+
+def extract_vk_token(text):
+    """Pull the access token out of an oauth redirect URL or a raw token"""
+    text = text.strip()
+
+    match = re.search(r'access_token=([A-Za-z0-9._\-]+)', text)
+    if match:
+        return match.group(1)
+
+    if re.fullmatch(r'[A-Za-z0-9._\-]{40,}', text):
+        return text
+
+    return None
+
+
+def mask_token(token):
+    """Show only the tail of a token"""
+    if not token:
+        return '—'
+    return f'...{token[-6:]}'
+
+
+def check_vk_token(token):
+    """Validate a VK token. Returns (is_valid, message)"""
+    try:
+        api = build_vk_session(token).get_api()
+        users = api.users.get()
+    except vk_api.exceptions.ApiError as e:
+        return False, f'ВК отклонил токен: {e}'
+    except Exception as e:
+        return False, f'Не удалось проверить токен: {e}'
+
+    if not users:
+        return False, 'Это не пользовательский токен — нужен токен пользователя со scope photos'
+
+    user = users[0]
+    owner = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
+    return True, f'Токен принадлежит: {owner} (id {user.get("id")})'
+
+
+async def set_vk_token_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /set_vk_token command"""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔️ У тебя нет прав менять токен ВК.")
+        return ConversationHandler.END
+
+    await update.message.reply_text(
+        "🔑 Обновление токена ВК\n\n" + VK_TOKEN_INSTRUCTIONS,
+        disable_web_page_preview=True
+    )
+    return WAITING_FOR_VK_TOKEN
+
+
+async def handle_vk_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Validate and store the VK token sent by the user"""
+    message_text = update.message.text or ''
+    token = extract_vk_token(message_text)
+
+    # Never keep the token sitting in the chat history
+    try:
+        await update.message.delete()
+    except Exception as e:
+        print(f'Could not delete message with token: {e}')
+
+    chat_id = update.effective_chat.id
+
+    if not token:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="❌ Не нашёл токен в сообщении. Пришли ссылку целиком или сам токен.\n"
+                 "Отмена — /cancel"
+        )
+        return WAITING_FOR_VK_TOKEN
+
+    is_valid, details = await asyncio.to_thread(check_vk_token, token)
+
+    if not is_valid:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"❌ {details}\n\nПопробуй ещё раз или отмени — /cancel"
+        )
+        return WAITING_FOR_VK_TOKEN
+
+    save_token(token, saved_by=update.effective_user.id)
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"✅ Токен ВК сохранён ({mask_token(token)})\n{details}"
+    )
+    return ConversationHandler.END
+
+
+async def vk_token_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /vk_token command — show which token is in use"""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔️ У тебя нет прав смотреть настройки токена ВК.")
+        return
+
+    stored = read_stored_token()
+    env_token = os.getenv('VK_ACCESS_TOKEN')
+
+    if stored:
+        source = f"задан командой /set_vk_token ({mask_token(stored)})"
+    elif env_token:
+        source = f"взят из VK_ACCESS_TOKEN ({mask_token(env_token)})"
+    else:
+        await update.message.reply_text(
+            "🔑 Токен ВК не задан.\nУстанови его командой /set_vk_token"
+        )
+        return
+
+    is_valid, details = await asyncio.to_thread(check_vk_token, stored or env_token)
+    status = "✅ рабочий" if is_valid else "❌ не работает"
+
+    await update.message.reply_text(
+        f"🔑 Токен ВК: {source}\nСтатус: {status}\n{details}"
+    )
+
+
+async def forget_vk_token_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /forget_vk_token command — drop the token saved via the bot"""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔️ У тебя нет прав менять токен ВК.")
+        return
+
+    if delete_token():
+        fallback = "VK_ACCESS_TOKEN из окружения" if os.getenv('VK_ACCESS_TOKEN') else "токена больше нет"
+        await update.message.reply_text(f"🗑 Сохранённый токен удалён. Теперь используется: {fallback}.")
+    else:
+        await update.message.reply_text("ℹ️ Сохранённого токена и не было.")
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
     welcome_message = (
         "👋 Welcome to VK Album Downloader Bot!\n\n"
         "Available commands:\n"
         "/download - Download and upload an album\n"
+        "/set_vk_token - Set the VK access token\n"
+        "/vk_token - Show current VK token status\n"
+        "/forget_vk_token - Delete the saved VK token\n"
         "/help - Show this help message\n\n"
         "Send /download to get started!"
     )
@@ -288,7 +459,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "   • Upload it to Yandex Disk\n"
         "   • Clean up local files\n"
         "4️⃣ Get the public link to your album!\n\n"
-        "💡 *Progress updates every 10%*"
+        "💡 *Progress updates every 10%*\n\n"
+        "🔑 *VK token:*\n"
+        "/set\\_vk\\_token — задать токен ВК прямо в боте\n"
+        "/vk\\_token — проверить текущий токен\n"
+        "/forget\\_vk\\_token — удалить сохранённый токен"
     )
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
@@ -470,10 +645,24 @@ def main():
         fallbacks=[CommandHandler('cancel', cancel)],
     )
     
+    # Conversation handler for setting the VK token
+    vk_token_handler = ConversationHandler(
+        entry_points=[CommandHandler('set_vk_token', set_vk_token_command)],
+        states={
+            WAITING_FOR_VK_TOKEN: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_vk_token)
+            ],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)],
+    )
+
     # Add handlers
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('help', help_command))
+    application.add_handler(CommandHandler('vk_token', vk_token_status_command))
+    application.add_handler(CommandHandler('forget_vk_token', forget_vk_token_command))
     application.add_handler(conv_handler)
+    application.add_handler(vk_token_handler)
     
     # Add global error handler
     application.add_error_handler(error_handler)

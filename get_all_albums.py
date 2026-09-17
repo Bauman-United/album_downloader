@@ -1,4 +1,6 @@
-from get_vk_session import get_vk_session
+import sys
+
+from get_vk_session import get_vk_session, VkTokenMissingError
 
 bu_names = ['БЮ', 'Bauman United', 'Бауман Юнайтед', 'BU']
 bauman_owners_ids = [-126910967, -76322058]
@@ -9,7 +11,11 @@ owner_ids = [-210711661, -118390813, -219138822, -119296549]
 
 
 def get_all_albums():
-    vk_session = get_vk_session()
+    try:
+        vk_session = get_vk_session()
+    except VkTokenMissingError as e:
+        print(e)
+        sys.exit(1)
     api = vk_session.get_api()
     vk_session._auth_token()
     token = vk_session.token['access_token']

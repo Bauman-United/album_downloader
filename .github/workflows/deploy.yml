@@ -66,6 +66,7 @@ jobs:
             YANDEX_DISK_TOKEN=${{ secrets.YANDEX_DISK_TOKEN }}
             YANDEX_DISK_PATH=${{ secrets.YANDEX_DISK_PATH }}
             TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+            TELEGRAM_ADMIN_IDS=${{ secrets.TELEGRAM_ADMIN_IDS }}
             EOF
             
             # Build and start container (try both docker compose v2 and v1)

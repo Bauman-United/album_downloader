@@ -18,7 +18,7 @@ Telegram bot to download VK photo albums and automatically upload them to Yandex
 
 | Service | Link |
 |---------|------|
-| VK API Token | https://oauth.vk.com/authorize?client_id=7624256&display=page&scope=photos,offline&response_type=token&v=5.131 |
+| VK API Token | see [VK token](#vk-token) — easiest way is `/set_vk_token` in the bot |
 | Yandex Disk Token | https://yandex.ru/dev/disk/poligon/ |
 | Telegram Bot Token | https://t.me/botfather (send `/newbot`) |
 
@@ -96,7 +96,55 @@ python telegram_bot.py
 - `/start` - Welcome and help
 - `/help` - Detailed instructions
 - `/download` - Start downloading album
+- `/set_vk_token` - Set the VK access token from the chat
+- `/vk_token` - Show which VK token is used and whether it still works
+- `/forget_vk_token` - Delete the token saved via the bot
 - `/cancel` - Cancel current operation
+
+## VK token
+
+The VK token is no longer required at deploy time — you can set it from the chat:
+
+1. Send `/set_vk_token` to the bot
+2. Open the link the bot sends and allow access
+3. Copy the address bar of the page you land on
+   (`https://oauth.vk.com/blank.html#access_token=...`) and send it back
+4. The bot validates the token, saves it and deletes your message
+
+The token is stored in `VK_TOKEN_FILE` (default `data/vk_token.json`, mounted as
+the `bot-config` Docker volume), so it survives restarts and redeploys.
+A token set this way takes priority over `VK_ACCESS_TOKEN` from the environment,
+which stays as a fallback.
+
+Set `TELEGRAM_ADMIN_IDS` (comma-separated Telegram user ids, get yours from
+[@userinfobot](https://t.me/userinfobot)) to restrict who may run these commands.
+If it is empty, anyone who can talk to the bot can change the token.
+
+### How to generate a fresh VK token for this bot
+
+The token must be a **user** token with the `photos` and `offline` scopes
+(`offline` makes it non-expiring; without it the token dies in ~24h).
+
+Fastest way — Implicit Flow with the app id already used by this project:
+
+```
+https://oauth.vk.com/authorize?client_id=7624256&display=page&redirect_uri=https://oauth.vk.com/blank.html&scope=photos,offline&response_type=token&v=5.131
+```
+
+Open it, confirm access, and take `access_token` from the resulting URL.
+
+To use your own VK app instead (recommended — then only you can revoke it):
+
+1. Go to https://vk.com/editapp?act=create and create an app of type
+   **"Standalone-приложение"**
+2. In **Settings** copy the **App ID** and set
+   **Authorized redirect URI** = `https://oauth.vk.com/blank.html`
+3. Turn the app **On and visible to everyone** (otherwise the token is limited)
+4. Open the same URL with your own `client_id`, then send the result to
+   `/set_vk_token`
+
+To revoke a token: VK → Settings → Security → App permissions (`https://vk.com/settings?act=apps`),
+delete the app. Then issue a new one and send `/set_vk_token` again.
 
 ## Docker Commands
 
@@ -138,6 +186,7 @@ git push origin main
 album_downloader/
 ├── telegram_bot.py              # Main bot
 ├── get_vk_session.py            # VK authentication
+├── vk_token_store.py            # Persisted VK token (set via /set_vk_token)
 ├── upload_to_yandex_disk.py     # Yandex Disk upload
 ├── main.py                      # CLI version
 ├── Dockerfile                   # Docker config
@@ -151,10 +200,15 @@ album_downloader/
 Required in `.env` file or GitHub Secrets:
 
 ```bash
+# Optional — fallback only, /set_vk_token wins over it
 VK_ACCESS_TOKEN=vk1.a.xxx...
+# Optional — where /set_vk_token stores the token (default: data/vk_token.json)
+VK_TOKEN_FILE=data/vk_token.json
 YANDEX_DISK_TOKEN=y0_xxx...
 TELEGRAM_BOT_TOKEN=1234567890:ABC...
 YANDEX_DISK_PATH=/VK_Albums
+# Optional — who may run /set_vk_token (empty = everyone)
+TELEGRAM_ADMIN_IDS=123456789
 ```
 
 ## Workflow Architecture
@@ -178,9 +232,9 @@ docker-compose restart
 ```
 
 ### Invalid token errors
-- Verify tokens in `.env` file
-- Check token format (no extra spaces)
-- Regenerate expired tokens
+- Run `/vk_token` in the bot to see which VK token is used and whether it works
+- Regenerate it with `/set_vk_token` (see [VK token](#vk-token))
+- For Yandex/Telegram tokens: verify them in the `.env` file (no extra spaces)
 
 ### GitHub Actions failing
 - Verify all secrets are set in GitHub

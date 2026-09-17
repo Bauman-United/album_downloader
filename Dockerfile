@@ -17,11 +17,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
 COPY get_vk_session.py .
+COPY vk_token_store.py .
 COPY upload_to_yandex_disk.py .
 COPY telegram_bot.py .
 
-# Create directory for downloaded albums
-RUN mkdir -p vk_downloaded_albums
+# Create directories for downloaded albums and persisted settings (VK token)
+RUN mkdir -p vk_downloaded_albums data
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1

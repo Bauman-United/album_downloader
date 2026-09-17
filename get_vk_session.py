@@ -3,11 +3,24 @@ import sys
 import os
 from dotenv import load_dotenv
 
+from vk_token_store import get_access_token
+
 # Load environment variables from .env file
 load_dotenv()
 
 
 path_to_user_data = 'passwords.txt'
+
+VK_TOKEN_HELP = (
+    'VK access token is not set.\n'
+    'Set it from the bot with /set_vk_token, '
+    'or put VK_ACCESS_TOKEN into the .env file.\n'
+    'How to get a token: see README.md ("VK token")'
+)
+
+
+class VkTokenMissingError(RuntimeError):
+    """Raised when no VK access token is configured"""
 
 
 def get_user_data():
@@ -34,18 +47,19 @@ def handler_captcha(captcha):
     key = input(f'Enter captcha code {captcha.get_url()}: ').strip()
     return captcha.try_again(key)
 
+
+def build_vk_session(access_token):
+    """Create a VK session for the given token"""
+    return vk_api.VkApi(token=access_token)
+
+
 def get_vk_session():
-    # Get access token from environment variable
-    access_token = os.getenv('VK_ACCESS_TOKEN')
-    
+    # Token saved via the bot command wins, VK_ACCESS_TOKEN is the fallback
+    access_token = get_access_token()
+
     if not access_token:
-        print('Error: VK_ACCESS_TOKEN not found in environment variables')
-        print('Please create a .env file with your VK access token')
-        print('Get your token from: https://oauth.vk.com/authorize?client_id=7624256&display=page&scope=photos,offline&response_type=token&v=5.131')
-        sys.exit(1)
-    
+        raise VkTokenMissingError(VK_TOKEN_HELP)
+
     # l, p = get_user_data()
     # vk_session = vk_api.VkApi(l, p, captcha_handler=handler_captcha, app_id=71697589)
-    vk_session = vk_api.VkApi(token=access_token)
-    return vk_session
-
+    return build_vk_session(access_token)
