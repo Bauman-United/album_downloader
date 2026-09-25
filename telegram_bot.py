@@ -4,7 +4,7 @@ import sys
 import re
 import shutil
 from dotenv import load_dotenv
-from telegram import Update
+from telegram import Update, BotCommand
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 import vk_api
@@ -23,7 +23,16 @@ WAITING_FOR_DESTINATION = 1
 WAITING_FOR_ALBUM_URL = 2
 WAITING_FOR_VK_TOKEN = 3
 path_to_downloaded_albums = 'vk_downloaded_albums'
-DESTINATION_OPTIONS = {'ЛФЛ': '/лфл/2026', 'БЛ': '/БЛ/весна_2026'}
+DESTINATION_OPTIONS = {'ЛФЛ': '/лфл/2026', 'БЛ': '/БЛ/осень_2026'}
+BOT_COMMANDS = [
+    ('start', 'Запустить бота и показать команды'),
+    ('download', 'Скачать альбом ВК и залить на Яндекс.Диск'),
+    ('set_vk_token', 'Задать токен ВК'),
+    ('vk_token', 'Проверить текущий токен ВК'),
+    ('forget_vk_token', 'Удалить сохранённый токен ВК'),
+    ('cancel', 'Отменить текущую операцию'),
+    ('help', 'Подробная инструкция'),
+]
 VK_TOKEN_INSTRUCTIONS = (
     "1️⃣ Открой ссылку и разреши доступ:\n"
     "https://oauth.vk.com/authorize?client_id=7624256&display=page"
@@ -618,6 +627,24 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f'Error in error handler: {e}')
 
 
+async def set_bot_commands(application):
+    """Register the command list so Telegram suggests it when typing '/'"""
+    try:
+        await application.bot.set_my_commands(
+            [BotCommand(command, description) for command, description in BOT_COMMANDS]
+        )
+    except Exception as e:
+        print(f'⚠️ Could not set bot commands: {e}')
+
+
+async def cancel_outside_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /cancel when there is nothing to cancel"""
+    await update.message.reply_text(
+        "ℹ️ Нечего отменять. Начни с /download или /set_vk_token",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+
 def main():
     """Start the bot"""
     token = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -629,7 +656,7 @@ def main():
         sys.exit(1)
     
     # Create application
-    application = Application.builder().token(token).build()
+    application = Application.builder().token(token).post_init(set_bot_commands).build()
     
     # Add conversation handler
     conv_handler = ConversationHandler(
@@ -663,6 +690,8 @@ def main():
     application.add_handler(CommandHandler('forget_vk_token', forget_vk_token_command))
     application.add_handler(conv_handler)
     application.add_handler(vk_token_handler)
+    # Must come after the conversation handlers: they claim /cancel while active
+    application.add_handler(CommandHandler('cancel', cancel_outside_conversation))
     
     # Add global error handler
     application.add_error_handler(error_handler)
